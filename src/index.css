@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #050507;
+    color: #f4f4f5;
+    font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  }
+}
+
+/* Custom Scrollbars for Immersive UI */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050507;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Background Grid Pattern */
+.bg-grid-pattern {
+  background-image: linear-gradient(to right, rgba(39, 39, 42, 0.15) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(39, 39, 42, 0.15) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Glow effects */
+.glow-cyan {
+  box-shadow: 0 0 15px rgba(34, 211, 238, 0.2);
+}
+
+.glow-cyan-sm {
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.4);
+}
+
+.glow-red {
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.25);
+}
+
+.writing-mode-vertical {
+  writing-mode: vertical-rl;
+}

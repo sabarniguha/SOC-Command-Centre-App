@@ -1,0 +1,6 @@
+{
+  "name": "Sentinel SOC v5.0 - Enterprise AI Security Operations Center",
+  "description": "Enterprise-grade AI-powered Security Operations Center with multi-agent threat investigation, MITRE ATT&CK mapping, attack graphs, SIEM logs, and real-time incident response.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
