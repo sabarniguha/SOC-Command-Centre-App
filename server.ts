@@ -28,34 +28,47 @@ function getGeminiClient() {
 
 // Helper function to execute Gemini calls with retries and model failover
 async function callGeminiWithRetry(ai: GoogleGenAI, params: any) {
-  // Standard supported model aliases in order of preference
+  // Active supported models from @google/genai guidelines
   const modelsToTry = [
+    "gemini-flash-latest",
+    "gemini-3.7-flash",
+    "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-2.5-pro",
   ];
   let lastError: any = null;
 
   for (const model of modelsToTry) {
-    try {
-      const response = await ai.models.generateContent({
-        ...params,
-        model,
-      });
-      if (response && response.text) {
-        return response;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          ...params,
+          model,
+        });
+        if (response && response.text) {
+          return response;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = err?.message || String(err);
+        const isTransient =
+          err?.status === "UNAVAILABLE" ||
+          err?.code === 503 ||
+          err?.code === 429 ||
+          errMsg.includes("503") ||
+          errMsg.includes("high demand") ||
+          errMsg.includes("UNAVAILABLE") ||
+          errMsg.includes("RESOURCE_EXHAUSTED");
+
+        if (isTransient && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 800 * attempt));
+        } else {
+          break; // proceed to next candidate model
+        }
       }
-    } catch (err: any) {
-      lastError = err;
-      const errMsg = err?.message || String(err);
-      console.warn(`Gemini API attempt on '${model}' failed: ${errMsg}`);
-      // Continue to next model immediately on error (e.g. 503 high demand or 404)
     }
   }
 
-  throw lastError || new Error("All Gemini API models are currently unavailable");
+  throw lastError || new Error("All Gemini API models are currently experiencing high demand");
 }
 
 // Health endpoint
