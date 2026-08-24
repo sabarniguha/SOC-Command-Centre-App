@@ -9,6 +9,8 @@ import {
   EndpointHost,
   FirewallRule,
   ThreatFeedItem,
+  SwarmDebateMessage,
+  PacketDissection,
 } from "../types";
 
 export const AGENT_PERSONAS: AgentPersona[] = [
@@ -259,15 +261,440 @@ export const MOCK_INCIDENTS: Incident[] = [
 ];
 
 export const MOCK_MITRE_TECHNIQUES: MitreTechnique[] = [
-  { code: "T1566", name: "Phishing", tactic: "Initial Access", status: "active_detection", severity: "High", description: "Adversaries send malicious emails with links or attachments.", queryExample: 'event.category: "email" AND email.attachment.extension: "exe"' },
-  { code: "T1059", name: "Command and Scripting Interpreter", tactic: "Execution", status: "active_detection", severity: "Critical", description: "PowerShell, CMD, Bash execution with obfuscated arguments.", queryExample: 'process.name: "powershell.exe" AND process.command_line: "*-Enc*"' },
-  { code: "T1053", name: "Scheduled Task/Job", tactic: "Persistence", status: "monitored", severity: "Medium", description: "Creating automated tasks for persistence.", queryExample: 'event.code: 4698 AND task.name: "*"' },
-  { code: "T1078", name: "Valid Accounts", tactic: "Defense Evasion", status: "monitored", severity: "Medium", description: "Using compromised credentials to bypass security controls.", queryExample: 'event.code: 4624 AND user.is_first_login: true' },
-  { code: "T1003", name: "OS Credential Dumping", tactic: "Credential Access", status: "active_detection", severity: "Critical", description: "Extracting credentials from LSASS or SAM database.", queryExample: 'process.target: "lsass.exe" AND granted_access: "0x1010"' },
-  { code: "T1021", name: "Remote Services", tactic: "Lateral Movement", status: "active_detection", severity: "High", description: "Lateral movement via RDP, SMB, WinRM, SSH.", queryExample: 'destination.port: 3389 AND network.direction: "internal"' },
-  { code: "T1071", name: "Application Layer Protocol", tactic: "Command and Control", status: "active_detection", severity: "Critical", description: "C2 communication disguised as HTTP/HTTPS/DNS traffic.", queryExample: 'dns.question.type: "TXT" AND dns.question.name.length > 50' },
-  { code: "T1041", name: "Exfiltration Over C2 Channel", tactic: "Exfiltration", status: "monitored", severity: "High", description: "Stealing stolen data through active C2 connections.", queryExample: 'network.bytes_sent > 100000000 AND destination.ip.is_external: true' },
-  { code: "T1486", name: "Data Encrypted for Impact", tactic: "Impact", status: "active_detection", severity: "Critical", description: "Ransomware encrypting local files and canary traps.", queryExample: 'file.extension: "*.locked" OR file.extension: "*.crypto"' },
+  {
+    code: "T1566",
+    name: "Phishing: Spearphishing Link",
+    tactic: "Initial Access",
+    status: "active_detection",
+    severity: "High",
+    adversary: "APT29 (Cozy Bear), FIN7",
+    detectabilityScore: 85,
+    description: "Adversaries send malicious emails containing hyperlinks targeting corporate users to deliver initial malware stagers or harvest credentials.",
+    queryExample: 'event.category: "email" AND (email.attachment.extension: "exe" OR email.attachment.extension: "lnk" OR email.link.reputation < 30)',
+    sigmaRule: `title: Suspicious Email Attachment or Clicked Link
+id: 52a5dc83-2c1a-464a-939e-2f3b7b4a2e21
+status: production
+description: Detects user interaction with suspicious external attachment
+logsource:
+    category: proxy
+    product: windows
+detection:
+    selection:
+        c-uri|contains:
+            - '.zip'
+            - '.iso'
+            - '.vhd'
+            - '.lnk'
+        cs-method: 'GET'
+    condition: selection
+level: high`,
+    yaraRule: `rule Spearphishing_LNK_Payload {
+    meta:
+        description = "Detects malicious Windows LNK shortcut files used in initial spearphishing"
+        author = "Sentinel SOC Threat Research"
+        threat_actor = "APT29"
+    strings:
+        $header = { 4C 00 00 00 01 14 02 00 }
+        $ps = "powershell.exe" nocase
+        $enc = "-EncodedCommand" nocase
+        $c2 = "http" nocase
+    condition:
+        $header at 0 and $ps and ($enc or $c2)
+}`,
+    suricataRule: `alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"SENTINEL-SOC Suspicious Inbound Zip/LNK Download"; flow:established,to_server; http.uri; content:".lnk"; fast_pattern; classtype:trojan-activity; sid:3000010; rev:1;)`,
+    remediation: "Deploy FIDO2/WebAuthn mandatory MFA, enable Microsoft Defender for Office 365 Safe Links, quarantine high-risk inbound attachments.",
+  },
+  {
+    code: "T1059",
+    name: "Command and Scripting Interpreter: PowerShell",
+    tactic: "Execution",
+    status: "active_detection",
+    severity: "Critical",
+    adversary: "Lazarus Group, LockBit 4.0",
+    detectabilityScore: 92,
+    description: "Adversaries abuse PowerShell commands and scripts to execute malicious payloads, bypass script execution policies, and load in-memory assemblies.",
+    queryExample: 'process.name: "powershell.exe" AND (process.command_line: "*-Enc*" OR process.command_line: "*Bypass*" OR process.command_line: "*DownloadString*")',
+    sigmaRule: `title: Obfuscated PowerShell Execution
+id: f439d5b0-13f6-455b-b9f4-0b1a03f4f89d
+status: production
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\\powershell.exe'
+        CommandLine|contains:
+            - '-enc '
+            - '-EncodedCommand'
+            - 'DownloadString('
+            - 'IEX('
+            - 'FromBase64String'
+    condition: selection
+level: critical`,
+    yaraRule: `rule Obfuscated_PowerShell_Script {
+    meta:
+        description = "Identifies in-memory obfuscated PowerShell cradle"
+    strings:
+        $a1 = "Net.WebClient" nocase
+        $a2 = "DownloadString" nocase
+        $a3 = "System.Reflection.Assembly" nocase
+        $a4 = "[System.Convert]::FromBase64String" nocase
+    condition:
+        ($a1 and $a2) or ($a3 and $a4)
+}`,
+    suricataRule: `alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"SENTINEL-SOC Encrypted PowerShell Web Download Cradle"; content:"DownloadString"; http_client_body; sid:3000012; rev:2;)`,
+    remediation: "Enforce PowerShell Constrained Language Mode (CLM), enable Script Block Logging (EID 4104), and configure AppLocker/WDAC policy.",
+  },
+  {
+    code: "T1053",
+    name: "Scheduled Task/Job: Scheduled Task",
+    tactic: "Persistence",
+    status: "monitored",
+    severity: "Medium",
+    adversary: "Turla, Sandworm",
+    detectabilityScore: 78,
+    description: "Adversaries configure scheduled tasks to maintain persistence, escalate privileges, and execute payloads at periodic intervals or upon user logon.",
+    queryExample: 'event.code: 4698 AND (task.name: "*WinSec*" OR task.action: "*powershell*" OR task.action: "*rundll32*")',
+    sigmaRule: `title: Suspicious Scheduled Task Creation
+id: 9a2f7c41-8f3b-419a-9812-7bb3d09a22f1
+status: production
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4698
+        TaskContent|contains:
+            - 'powershell.exe'
+            - 'cmd.exe /c'
+            - 'AppData\\Local\\Temp'
+    condition: selection
+level: high`,
+    yaraRule: `rule Malicious_Scheduled_Task_XML {
+    meta:
+        description = "Detects XML task definitions with suspicious binary targets"
+    strings:
+        $tag = "<Task"
+        $exec = "<Command>"
+        $susp = "C:\\Windows\\Temp\\"
+    condition:
+        $tag and $exec and $susp
+}`,
+    suricataRule: `alert smb $HOME_NET any -> $HOME_NET any (msg:"SENTINEL-SOC Remote Scheduled Task SMB Creation"; flow:established,to_server; content:"ITaskScheduler"; sid:3000015; rev:1;)`,
+    remediation: "Audit Event ID 4698/4702 logs via SIEM, restrict standard user access to schtasks.exe, and audit Autoruns registry hives.",
+  },
+  {
+    code: "T1078",
+    name: "Valid Accounts: Domain & Cloud Accounts",
+    tactic: "Defense Evasion",
+    status: "monitored",
+    severity: "Medium",
+    adversary: "Scattered Spider, APT29",
+    detectabilityScore: 70,
+    description: "Adversaries obtain and abuse existing legitimate credentials to blend in with normal administrative traffic and evade traditional signature alerts.",
+    queryExample: 'event.code: 4624 AND user.is_first_login: true AND (network.source.geo.country_name != "US" OR network.direction: "external")',
+    sigmaRule: `title: Impossible Travel / Anomalous Admin Login
+id: 3c1a90d8-11f4-42b1-87a3-199c4d28f091
+status: production
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4624
+        LogonType: 10 # RemoteInteractive RDP
+        TargetUserName|contains:
+            - 'admin'
+            - 'svc_'
+    condition: selection
+level: medium`,
+    yaraRule: `rule Credential_Config_Artifacts {
+    meta:
+        description = "Detects saved cleartext credentials in memory or files"
+    strings:
+        $p1 = "password=" nocase
+        $p2 = "admin_password=" nocase
+    condition:
+        $p1 or $p2
+}`,
+    suricataRule: `alert http $EXTERNAL_NET any -> $HOME_NET any (msg:"SENTINEL-SOC Multiple Failed Kerberos/NTLM Logins"; threshold:type both, track by_src, count 10, seconds 60; sid:3000018; rev:3;)`,
+    remediation: "Deploy Conditional Access policies with risk-based sign-in blocks, mandate hardware FIDO2 tokens, and enforce privileged access workstations (PAWs).",
+  },
+  {
+    code: "T1003",
+    name: "OS Credential Dumping: LSASS Memory",
+    tactic: "Credential Access",
+    status: "active_detection",
+    severity: "Critical",
+    adversary: "FIN7, Wizard Spider (Ryuk/Conti)",
+    detectabilityScore: 98,
+    description: "Adversaries attempt to dump Local Security Authority Subsystem Service (LSASS) memory to steal cleartext passwords, NTLM hashes, and Kerberos tickets.",
+    queryExample: 'process.target: "lsass.exe" AND (granted_access: "0x1010" OR granted_access: "0x1fffff" OR granted_access: "0x1410")',
+    sigmaRule: `title: LSASS Memory Access and Dump
+id: a1f83c92-3491-45a8-8b9f-09e4d101e459
+status: production
+logsource:
+    category: process_access
+    product: windows
+detection:
+    selection:
+        TargetImage|endswith: '\\lsass.exe'
+        GrantedAccess|contains:
+            - '0x1010'
+            - '0x1F0FFF'
+            - '0x1FFFFF'
+            - '0x1410'
+    filter:
+        SourceImage|endswith:
+            - '\\csagent.exe'
+            - '\\MsMpEng.exe'
+    condition: selection and not filter
+level: critical`,
+    yaraRule: `rule Mimikatz_LSASS_Dumping_Signatures {
+    meta:
+        description = "Detects Mimikatz sekurlsa and minidump artifacts"
+        author = "Sentinel SOC Threat Research"
+    strings:
+        $m1 = "sekurlsa::logonpasswords" ascii wide nocase
+        $m2 = "privilege::debug" ascii wide nocase
+        $m3 = "lsasrv.dll" ascii wide nocase
+        $m4 = "MiniDumpWriteDump" ascii wide nocase
+    condition:
+        2 of ($m*)
+}`,
+    suricataRule: `alert smb $HOME_NET any -> $HOME_NET any (msg:"SENTINEL-SOC Remote LSASS Named Pipe Access via SMB"; flow:established,to_server; content:"\\\\lsass"; fast_pattern; sid:3000020; rev:2;)`,
+    remediation: "Enable Windows Defender Credential Guard (LSA Protection), restrict Debug privilege (SeDebugPrivilege), and turn on ASR rule 'Block credential stealing from LSASS'.",
+  },
+  {
+    code: "T1021",
+    name: "Remote Services: SMB/Windows Admin Shares",
+    tactic: "Lateral Movement",
+    status: "active_detection",
+    severity: "High",
+    adversary: "Sandworm (NotPetya), LockBit",
+    detectabilityScore: 88,
+    description: "Adversaries move laterally across internal networks by connecting to SMB shares (ADMIN$, C$, IPC$) using stolen administrative tokens.",
+    queryExample: 'destination.port: 445 AND network.direction: "internal" AND (smb.share_name: "ADMIN$" OR smb.share_name: "C$")',
+    sigmaRule: `title: Lateral Movement via Admin SMB Share
+id: e4b29c11-9a1c-43f1-b928-87a911f92e10
+status: production
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 5140
+        ShareName|contains:
+            - 'ADMIN$'
+            - 'C$'
+            - 'IPC$'
+    condition: selection
+level: high`,
+    yaraRule: `rule PsExec_Service_Creation {
+    meta:
+        description = "Detects PsExec service installation binaries and pipes"
+    strings:
+        $p1 = "\\\\.\\pipe\\psexec" ascii wide
+        $p2 = "PsExec.exe" ascii wide nocase
+    condition:
+        $p1 or $p2
+}`,
+    suricataRule: `alert smb $HOME_NET any -> $HOME_NET 445 (msg:"SENTINEL-SOC Lateral SMB ADMIN$ Tree Connect"; flow:established,to_server; content:"ADMIN$"; fast_pattern; sid:3000022; rev:1;)`,
+    remediation: "Block inbound port 445 on workstation host firewalls, implement microsegmentation, and deploy Microsoft LAPS for unique local admin credentials.",
+  },
+  {
+    code: "T1071",
+    name: "Application Layer Protocol: Web & DNS Protocols",
+    tactic: "Command and Control",
+    status: "active_detection",
+    severity: "Critical",
+    adversary: "Cobalt Strike, Sliver, Havoc C2",
+    detectabilityScore: 94,
+    description: "Adversaries disguise Command and Control (C2) beacons inside legitimate HTTP, HTTPS, and DNS request-response cycles with randomized jitter.",
+    queryExample: 'dns.question.type: "TXT" AND dns.question.name.length > 45 OR (http.request.uri: "/api/v1/telemetry*" AND http.response.bytes > 5000)',
+    sigmaRule: `title: Cobalt Strike Malleable C2 Beaconing
+id: 7c91a0f8-33b2-4d1a-9f12-00b81e491a22
+status: production
+logsource:
+    category: proxy
+    product: windows
+detection:
+    selection:
+        c-uri|contains:
+            - '/submit.php?id='
+            - '/pixel.gif'
+            - '/match/'
+        cs-header|contains: 'Cookie: SESSIONID='
+    condition: selection
+level: critical`,
+    yaraRule: `rule Cobalt_Strike_Beacon_In_Memory {
+    meta:
+        description = "Detects in-memory Cobalt Strike Beacon reflection loader"
+    strings:
+        $loader = { 4D 5A 41 52 55 48 89 E5 48 83 EC }
+        $pipe = "\\\\.\\pipe\\msse-" ascii wide
+        $http = "%s%s: %s" ascii
+    condition:
+        $loader at 0 or ($pipe and $http)
+}`,
+    suricataRule: `alert tls $HOME_NET any -> $EXTERNAL_NET 443 (msg:"SENTINEL-SOC Cobalt Strike Default TLS Certificate Subject"; tls.cert_subject; content:"CN=Major League Baseball"; sid:3000025; rev:4;)`,
+    remediation: "Enforce TLS 1.3 Inspection on perimeter firewalls, block high-risk dynamic DNS categories, and deploy Jitter & Beacon Frequency anomaly detection.",
+  },
+  {
+    code: "T1041",
+    name: "Exfiltration Over C2 Channel",
+    tactic: "Exfiltration",
+    status: "monitored",
+    severity: "High",
+    adversary: "BlackCat / ALPHV, RansomHub",
+    detectabilityScore: 84,
+    description: "Adversaries exfiltrate sensitive intellectual property, databases, and configuration secrets back over active C2 command channels to cloud buckets.",
+    queryExample: 'network.bytes_sent > 50000000 AND destination.ip.is_external: true AND flow.duration_seconds > 120',
+    sigmaRule: `title: Large Outbound Data Transfer via Non-Standard Port
+id: d19c8a2b-44f1-48e2-b102-44a19e83b100
+status: production
+logsource:
+    category: firewall
+detection:
+    selection:
+        bytes_out|gt: 50000000
+        dst_port|nin:
+            - 80
+            - 443
+            - 53
+    condition: selection
+level: high`,
+    yaraRule: `rule Data_Archiver_7z_Rclone_Config {
+    meta:
+        description = "Detects rclone exfiltration tool configurations"
+    strings:
+        $r1 = "[mega]" nocase
+        $r2 = "type = s3" nocase
+        $r3 = "rclone.conf" nocase
+    condition:
+        2 of them
+}`,
+    suricataRule: `alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"SENTINEL-SOC Mega.nz/Rclone Cloud Storage Exfil Session"; flow:established,to_server; content:"mega.co.nz"; http_header; sid:3000028; rev:2;)`,
+    remediation: "Deploy Cloud Access Security Broker (CASB) with egress DLP policies, enforce egress bandwidth rate limits, and block unapproved cloud storage buckets.",
+  },
+  {
+    code: "T1486",
+    name: "Data Encrypted for Impact: Ransomware",
+    tactic: "Impact",
+    status: "active_detection",
+    severity: "Critical",
+    adversary: "LockBit 4.0, BlackCat, Akira",
+    detectabilityScore: 99,
+    description: "Adversaries encrypt enterprise files, databases, and hypervisor storage pools to disrupt operations and extort ransom payments.",
+    queryExample: 'file.extension: "*.locked" OR file.extension: "*.crypto" OR process.command_line: "*vssadmin delete shadows*"',
+    sigmaRule: `title: VSS Shadow Copy Deletion & Ransomware Activity
+id: 1f0a2d3c-9182-4b71-a831-77a82910c201
+status: production
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith:
+            - '\\vssadmin.exe'
+            - '\\wbadmin.exe'
+            - '\\bcdedit.exe'
+        CommandLine|contains:
+            - 'delete shadows'
+            - 'resize shadowstorage'
+            - 'recoveryenabled no'
+            - 'ignoreallfailures'
+    condition: selection
+level: critical`,
+    yaraRule: `rule Generic_Ransomware_Note_Strings {
+    meta:
+        description = "Identifies ransom note text and cryptographic markers"
+    strings:
+        $n1 = "All your files have been encrypted" nocase
+        $n2 = "TOR browser" nocase
+        $n3 = "decrypt your files" nocase
+        $n4 = "onion.pet" nocase
+    condition:
+        2 of them
+}`,
+    suricataRule: `alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"SENTINEL-SOC Ransomware TOR Node Egress Negotiation"; flow:established,to_server; content:"torproject.org"; sid:3000030; rev:2;)`,
+    remediation: "Maintain immutable offline and air-gapped backups, deploy canary decoy files on file shares, and enable EDR Automated Ransomware Rollback.",
+  },
+];
+
+export const MOCK_SWARM_DEBATE: SwarmDebateMessage[] = [
+  {
+    id: "swm-1",
+    agentId: "commander",
+    agentName: "Commander Vance",
+    agentAvatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+    timestamp: "10:14:02 UTC",
+    confidenceScore: 94,
+    stance: "CONTAIN_NOW",
+    content: "Incident INC-2026-8801 escalated to Priority Critical. LSASS memory dump detected on financial server SRV-FINANCE-02. I am proposing immediate network isolation of host 10.0.4.112.",
+    technicalFinding: "Process Access EventID 10 targeting LSASS with GrantedAccess 0x1010 from unapproved PowerShell process PID 4102.",
+    proposedAction: "Trigger CrowdStrike Falcon Network Containment & Egress Firewall Drop Rule #FW-1001.",
+  },
+  {
+    id: "swm-2",
+    agentId: "hunter",
+    agentName: "Aegis the Hunter",
+    agentAvatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+    timestamp: "10:14:15 UTC",
+    confidenceScore: 89,
+    stance: "MONITOR_BEACON",
+    content: "Hold full containment for 45 seconds. I have identified outbound C2 beaconing to 185.220.101.44 with 60s jitter. Correlating lateral movement attempts across subnet 10.0.4.0/24 first to prevent secondary sleeper implants.",
+    technicalFinding: "Correlated 14 anomalous DNS TXT queries with Shannon entropy > 4.8 to domain c2-beacon-update.xyz.",
+    proposedAction: "Run SIEM live correlation on internal SMB (port 445) and WinRM (port 5985) traffic from SRV-FINANCE-02.",
+  },
+  {
+    id: "swm-3",
+    agentId: "malware",
+    agentName: "Cipher Malware Analyst",
+    agentAvatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+    timestamp: "10:14:28 UTC",
+    confidenceScore: 98,
+    stance: "CONTAIN_NOW",
+    content: "Decompilation complete. Payload is Cobalt Strike Beacon v4.8 using Malleable C2 profile. Named pipe \\\\.\\pipe\\msse-4102-a has been spawned. Process injection into svchost.exe (PID 892) is imminent. Waiting increases risk of persistence.",
+    technicalFinding: "Extracted config: Watermark 419201, C2 Public Key Hash match with APT29 infrastructure. Reflective DLL injection confirmed.",
+    proposedAction: "Kill PID 4102 and isolate SRV-FINANCE-02 immediately. Do not delay containment.",
+  },
+  {
+    id: "swm-4",
+    agentId: "forensics",
+    agentName: "Chronos Forensics",
+    agentAvatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80",
+    timestamp: "10:14:39 UTC",
+    confidenceScore: 92,
+    stance: "GATHER_EVIDENCE",
+    content: "Snapshotting volatile memory (RAM) and acquiring MFT logs via EDR agent before network disconnect. Scheduled task 'WinSecMaintain' was created 3 minutes prior at 10:11:30 UTC for persistence.",
+    technicalFinding: "LNK shortcut originated from phishing email 'Q3_Financial_Review.zip' delivered via Outlook at 10:09:12 UTC.",
+    proposedAction: "Capture 16GB memory dump file for Volatility 3 analysis and quarantine C:\\Windows\\System32\\Tasks\\WinSecMaintain.",
+  },
+  {
+    id: "swm-5",
+    agentId: "responder",
+    agentName: "Responder Vanguard",
+    agentAvatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80",
+    timestamp: "10:14:50 UTC",
+    confidenceScore: 97,
+    stance: "REVOKE_IDENTITY",
+    content: "Consensus reached. Executing automated SOAR Playbook #PB-409: Host network isolation engaged, Palo Alto firewall egress IP block active, and AD password reset triggered for service account svc_db_admin.",
+    technicalFinding: "Kerberos TGT ticket invalidated. Zero lateral movement observed across perimeter domain controllers.",
+    proposedAction: "Enforce Dynamic Firewall ACL Rule FW-1001. Status: ALL THREATS CONTAINED.",
+  },
+  {
+    id: "swm-6",
+    agentId: "reporter",
+    agentName: "Reporter Sentinel",
+    agentAvatar: "https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150&auto=format&fit=crop&q=80",
+    timestamp: "10:15:02 UTC",
+    confidenceScore: 99,
+    stance: "BROADCAST_ALERT",
+    content: "Executive incident briefing compiled. Threat vector contained within 4.2 minutes (MTTR). Zero data exfiltration. Generating CISO executive summary and regulatory audit logs.",
+    technicalFinding: "Dwell time: 5m 50s. Root cause: Spearphishing link (T1566) -> PowerShell (T1059) -> LSASS Access (T1003).",
+    proposedAction: "Dispatch automated PDF executive briefing to CISO, VP of Infrastructure, and Legal Council.",
+  },
 ];
 
 export const MOCK_SIEM_LOGS: SIEMLog[] = [

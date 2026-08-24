@@ -89,6 +89,36 @@ export interface MitreTechnique {
   severity: Severity;
   description: string;
   queryExample: string;
+  adversary?: string;
+  sigmaRule?: string;
+  yaraRule?: string;
+  suricataRule?: string;
+  remediation?: string;
+  detectabilityScore?: number; // 1-100
+}
+
+export interface PacketDissection {
+  protocol: string;
+  srcPort: number;
+  dstPort: number;
+  flags: string;
+  hexDump: string;
+  decodedAscii: string;
+  entropy: number;
+  verdict: string;
+}
+
+export interface SwarmDebateMessage {
+  id: string;
+  agentId: AgentPersonaId;
+  agentName: string;
+  agentAvatar: string;
+  timestamp: string;
+  confidenceScore: number;
+  stance: "CONTAIN_NOW" | "GATHER_EVIDENCE" | "MONITOR_BEACON" | "REVOKE_IDENTITY" | "BROADCAST_ALERT";
+  content: string;
+  technicalFinding: string;
+  proposedAction: string;
 }
 
 export interface SIEMLog {
